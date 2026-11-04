@@ -17,6 +17,7 @@ export type PhaseInfo = {
   wins: number;
   reason: string;
   map: MapId;
+  basesTaken: number;
 };
 
 export type HudNodes = {
@@ -78,6 +79,12 @@ export type GameApi = {
   isMuted: () => boolean;
   getSens: () => number;
   selectWeapon: (index: number) => void;
+  setLoadout: (ids: string[]) => void;
+  setAbilities: (ids: string[]) => void;
+  useAbility: (i: number) => boolean;
+  getAbilities: () => { id: string; cd: number; max: number }[];
+  getLoadoutNames: () => string[];
+  setSkin: (hex: number | null) => void;
   cycleWeapon: () => void;
 };
 
@@ -148,7 +155,8 @@ const ROUND = 210;
 const STEP = 1 / 60;
 const PITCH_LIMIT = Math.PI / 2 - 0.04;
 
-type WeaponId = "rifle" | "smg" | "shot" | "pistol" | "dmr";
+type WeaponId = "rifle" | "smg" | "shot" | "pistol" | "dmr" | "lmg" | "revolver" | "carbine" | "glaciar";
+type BaseSound = "rifle" | "smg" | "shot" | "pistol" | "dmr";
 
 type WeaponDef = {
   id: WeaponId;
@@ -176,6 +184,8 @@ type WeaponDef = {
   fallMin: number;
   adsFov: number;
   draw: number;
+  model?: number;
+  snd?: BaseSound;
 };
 
 const WEAPONS: WeaponDef[] = [
@@ -313,6 +323,31 @@ const WEAPONS: WeaponDef[] = [
     fallMin: 0.86,
     adsFov: 26,
     draw: 0.36,
+  },
+  {
+    id: "lmg", name: "AM-60", blurb: "AMETRALLADORA", magSize: 60, reserve: 180, interval: 0.085, reloadTime: 3.1,
+    damage: 23, head: 70, pellets: 1, spread: 0.007, sprayGrow: 0.05, sprayAdd: 0.09, moveSpread: 0.006, air: 0.04,
+    adsTight: 0.55, recoil: 0.013, yawKick: 0.011, auto: true, kick: 1.05, fallStart: 24, fallDist: 36, fallMin: 0.66,
+    adsFov: 52, draw: 0.5, model: 0, snd: "rifle",
+  },
+  {
+    id: "revolver", name: "RV-44", blurb: "REVÓLVER", magSize: 6, reserve: 36, interval: 0.42, reloadTime: 1.9,
+    damage: 55, head: 120, pellets: 1, spread: 0.0022, sprayGrow: 0.02, sprayAdd: 0.3, moveSpread: 0.0026, air: 0.02,
+    adsTight: 0.6, recoil: 0.034, yawKick: 0.01, auto: false, kick: 1.2, fallStart: 22, fallDist: 30, fallMin: 0.6,
+    adsFov: 52, draw: 0.24, model: 3, snd: "dmr",
+  },
+  {
+    id: "carbine", name: "K-4", blurb: "CARABINA", magSize: 25, reserve: 100, interval: 0.075, reloadTime: 1.6,
+    damage: 21, head: 64, pellets: 1, spread: 0.006, sprayGrow: 0.045, sprayAdd: 0.12, moveSpread: 0.0035, air: 0.03,
+    adsTight: 0.58, recoil: 0.011, yawKick: 0.009, auto: true, kick: 0.8, fallStart: 22, fallDist: 30, fallMin: 0.6,
+    adsFov: 54, draw: 0.25, model: 1, snd: "smg",
+  },
+  {
+    // Exclusiva del pase POLAR: congela (ralentiza) a los bots que impacta.
+    id: "glaciar", name: "GL-0 GLACIAR", blurb: "CRIOFUSIL", magSize: 24, reserve: 96, interval: 0.11, reloadTime: 1.9,
+    damage: 27, head: 78, pellets: 1, spread: 0.0045, sprayGrow: 0.04, sprayAdd: 0.1, moveSpread: 0.0032, air: 0.03,
+    adsTight: 0.55, recoil: 0.012, yawKick: 0.008, auto: true, kick: 0.9, fallStart: 26, fallDist: 34, fallMin: 0.62,
+    adsFov: 50, draw: 0.34, model: 5, snd: "rifle",
   },
 ];
 const KEYS = new Set([
@@ -1560,6 +1595,40 @@ export function createGame(
     return { mag, rest: -0.08, pump: false, flash: muzzleFlash(root, 0.04, -0.78, 0.18) };
   });
 
+  // GL-0 GLACIAR: pintura polar (hielo azul/blanco) + partículas de escarcha.
+  const iceMat = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x2a8cff, emissiveIntensity: 0.32, roughness: 0.14, metalness: 0.35, envMapIntensity: 1.4 });
+  const snowMat = new THREE.MeshStandardMaterial({ color: 0xd6e4f0, roughness: 0.85, metalness: 0.05 });
+  const crystalMat = new THREE.MeshStandardMaterial({ color: 0x9fe9ff, emissive: 0x47d4ff, emissiveIntensity: 1.1, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.85 });
+  let frostPts: THREE.Points | null = null;
+  pushGun((root) => {
+    root.scale.setScalar(0.74);
+    root.position.set(0.02, -0.01, 0.05);
+    addMesh(root, new THREE.BoxGeometry(0.05, 0.08, 0.26), snowMat, 0, 0.01, 0.2);
+    addMesh(root, new THREE.BoxGeometry(0.07, 0.1, 0.36), iceMat, 0, 0.02, -0.07);
+    addMesh(root, tube(0.014, 0.018, 0.46), iceMat, 0, 0.04, -0.46);
+    for (let i = 0; i < 4; i++) addMesh(root, new THREE.OctahedronGeometry(0.022 - i * 0.003), crystalMat, 0, 0.04, -0.3 - i * 0.09, 0, i, 0.6);
+    addMesh(root, new THREE.ConeGeometry(0.02, 0.08, 6), crystalMat, 0.03, 0.1, -0.1, 0.3, 0, -0.5);
+    addMesh(root, new THREE.ConeGeometry(0.016, 0.06, 6), crystalMat, -0.03, 0.09, -0.02, 0.2, 0, 0.5);
+    addMesh(root, new THREE.BoxGeometry(0.02, 0.03, 0.22), snowMat, 0, 0.09, -0.06);
+    const mag = addMesh(root, new THREE.BoxGeometry(0.04, 0.16, 0.06), crystalMat, 0, -0.12, -0.05, 0.15);
+    addMesh(root, new THREE.BoxGeometry(0.04, 0.11, 0.042), snowMat, 0, -0.07, 0.07, 0.2);
+    addMesh(root, new THREE.BoxGeometry(0.06, 0.07, 0.09), glove, 0.01, -0.02, -0.18, 0.4);
+    addMesh(root, new THREE.BoxGeometry(0.05, 0.08, 0.06), glove, 0, -0.05, 0.08, 0.3);
+    const n = 22;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * 0.14;
+      pos[i * 3 + 1] = Math.random() * 0.16 - 0.02;
+      pos[i * 3 + 2] = -Math.random() * 0.7 + 0.1;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    frostPts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xdff6ff, size: 0.005, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    root.add(frostPts);
+    return { mag, rest: -0.12, pump: false, flash: muzzleFlash(root, 0.04, -0.72, 0.2) };
+  });
+  const frost = new Map<Bot, number>();
+
   const enemyMuzzle = new THREE.Mesh(
     new THREE.SphereGeometry(0.09, 8, 8),
     new THREE.MeshBasicMaterial({ color: 0xffe2a0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
@@ -1643,6 +1712,35 @@ export function createGame(
     deaths: 0,
   };
   let wep = 0;
+  let loadout: number[] = [0, 1, 3];
+  let slot = 0;
+  const mdl = (i: number) => WEAPONS[i].model ?? i;
+  type AbilId = "dash" | "escudo" | "cura" | "radar";
+  const ABIL_CD: Record<AbilId, number> = { dash: 6, escudo: 18, cura: 20, radar: 15 };
+  let abils: { id: AbilId; cd: number }[] = [{ id: "dash", cd: 0 }];
+  let shieldT = 0;
+  let radarT = 0;
+  let dashT = 0;
+  function useAbility(i: number) {
+    const a = abils[i];
+    if (!a || a.cd > 0 || phase !== "play" || !player.alive || player.down > 0) return false;
+    a.cd = ABIL_CD[a.id];
+    if (a.id === "dash") {
+      dashT = 0.2;
+      say("DASH", 0.6);
+    } else if (a.id === "escudo") {
+      shieldT = 4;
+      say("ESCUDO ACTIVO", 1.2);
+    } else if (a.id === "cura") {
+      player.hp = Math.min(100, player.hp + 50);
+      say("+50 VIDA", 1);
+    } else if (a.id === "radar") {
+      radarT = 7;
+      say("RADAR: ENEMIGOS EN EL MAPA", 1.4);
+    }
+    audio.blip();
+    return true;
+  }
   const ammo = WEAPONS.map((w) => ({ mag: w.magSize, reserve: w.reserve }));
   let semiLatch = false;
   let wheelLock = 0;
@@ -1662,12 +1760,16 @@ export function createGame(
   }
 
   function showGun() {
-    for (let i = 0; i < guns.length; i++) guns[i].root.visible = i === wep;
+    const mi = mdl(wep);
+    for (let i = 0; i < guns.length; i++) guns[i].root.visible = i === mi;
   }
 
   function selectWeapon(index: number) {
-    const next = ((index % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+    const n = loadout.length;
+    const ns = ((index % n) + n) % n;
+    const next = loadout[ns];
     if (next === wep || player.down > 0) return;
+    slot = ns;
     pushAmmo();
     wep = next;
     pullAmmo();
@@ -1754,6 +1856,7 @@ export function createGame(
       wins: save.wins,
       reason,
       map: activeMap.id,
+      basesTaken: bases.filter((b) => b.p >= 100).length,
     };
   }
 
@@ -1807,7 +1910,11 @@ export function createGame(
     player.pitch = 0;
     player.hp = 100;
     player.armor = 50;
-    wep = 0;
+    slot = 0;
+    wep = loadout[0];
+    shieldT = 0;
+    radarT = 0;
+    for (const a of abils) a.cd = 0;
     for (let i = 0; i < WEAPONS.length; i++) {
       ammo[i].mag = WEAPONS[i].magSize;
       ammo[i].reserve = WEAPONS[i].reserve;
@@ -1900,7 +2007,7 @@ export function createGame(
 
   function damagePlayer(amount: number, head: boolean, srcX: number, srcZ: number) {
     if (!player.alive || player.invuln > 0 || phase !== "play") return;
-    let dmg = amount;
+    let dmg = shieldT > 0 ? amount * 0.25 : amount;
     if (!head && player.armor > 0) {
       const absorbed = Math.min(player.armor, dmg * 0.5);
       player.armor -= absorbed;
@@ -1952,6 +2059,7 @@ export function createGame(
     if (!bot.alive || !bot.enabled) return;
     bot.hp -= dmg;
     bot.flash = 0.12;
+    if (credit === "local" && WEAPONS[wep].id === "glaciar") frost.set(bot, 1.4);
     bot.alert = 3.2;
     bot.lx = credit === "ally" ? remote.x : player.x;
     bot.lz = credit === "ally" ? remote.z : player.z;
@@ -1984,8 +2092,8 @@ export function createGame(
     gunKick = w.kick;
     flashLife = w.id === "shot" ? 0.07 : 0.045;
     shake = Math.min(1.2, shake + (w.id === "shot" ? 0.72 : w.id === "dmr" ? 0.48 : 0.32));
-    audio.shot(0.55 + w.kick * 0.28, 0, w.id);
-    const gun = guns[wep];
+    audio.shot(0.55 + w.kick * 0.28, 0, w.snd ?? (w.id as BaseSound));
+    const gun = guns[mdl(wep)];
     gun.flash.scale.setScalar((w.id === "shot" ? 1.65 : w.id === "pistol" ? 0.7 : w.id === "smg" ? 0.85 : 1.1) * (0.85 + Math.random() * 0.3));
     gun.flash.rotation.z = Math.random() * Math.PI * 2;
     tracerMat.color.set(w.id === "dmr" ? 0xff9a3c : w.id === "smg" ? 0xffe08a : w.id === "pistol" ? 0xffd27a : 0xffc14a);
@@ -2462,7 +2570,7 @@ export function createGame(
       dx /= l2;
       dz /= l2;
     }
-    const speed = see ? 4.5 : 3.15;
+    const speed = (see ? 4.5 : 3.15) * ((frost.get(bot) ?? 0) > 0 ? 0.5 : 1);
     const beforeX = bot.x;
     const beforeZ = bot.z;
     const moved = moveCircle(bot.x, bot.z, dx * speed * dt, dz * speed * dt, 0.36);
@@ -2600,6 +2708,28 @@ export function createGame(
   }
 
   function paintHud(dt: number) {
+    for (const [b, t] of frost) if (t - dt <= 0) frost.delete(b); else frost.set(b, t - dt);
+    if (frostPts && frostPts.parent?.visible) {
+      const a = frostPts.geometry.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < a.count; i++) {
+        let y = a.getY(i) + dt * (0.03 + (i % 5) * 0.012);
+        if (y > 0.16) y = -0.02;
+        a.setY(i, y);
+        a.setX(i, a.getX(i) + Math.sin(performance.now() * 0.002 + i) * dt * 0.01);
+      }
+      a.needsUpdate = true;
+    }
+    shieldT = Math.max(0, shieldT - dt);
+    radarT = Math.max(0, radarT - dt);
+    if (dashT > 0 && phase === "play") {
+      const st = Math.min(dt, dashT);
+      dashT -= st;
+      const f = forwardOf(player.yaw, 0);
+      const m = moveCircle(player.x, player.z, f.x * 22 * st, f.z * 22 * st, 0.38);
+      player.x = m.x;
+      player.z = m.z;
+    }
+    if (phase === "play") for (const a of abils) a.cd = Math.max(0, a.cd - dt);
     const playing = phase === "play" || phase === "pause";
     hud.root.classList.toggle("hidden", !playing);
     setText(hud.hp, String(Math.max(0, Math.ceil(player.hp))));
@@ -2607,7 +2737,7 @@ export function createGame(
     setText(hud.armor, String(Math.max(0, Math.ceil(player.armor))));
     setText(hud.weaponName, `${liveWeapon().name} · ${liveWeapon().blurb}`);
     const slotNodes = hud.slots.children;
-    for (let i = 0; i < slotNodes.length; i++) slotNodes[i].classList.toggle("is-on", i === wep);
+    for (let i = 0; i < slotNodes.length; i++) slotNodes[i].classList.toggle("is-on", i === slot);
     setText(hud.mag, player.reload > 0 ? "—" : String(player.mag));
     setText(hud.reserve, String(player.reserve));
     setText(hud.timer, fmtTime(timer));
@@ -2702,7 +2832,7 @@ export function createGame(
     }
     for (const bot of bots) {
       if (!bot.enabled || !bot.alive) continue;
-      if (Math.hypot(bot.x - player.x, bot.z - player.z) > 24 && phase === "play") continue;
+      if (radarT <= 0 && Math.hypot(bot.x - player.x, bot.z - player.z) > 24 && phase === "play") continue;
       const p = project(bot.x, bot.z);
       ctx.fillStyle = "#9ff4ef";
       ctx.fillRect(p.px - 2, p.py - 2, 4, 4);
@@ -2776,7 +2906,7 @@ export function createGame(
         lerp(-0.5, -0.38, a) - gunKick * 0.08 - drawK * 0.16,
       );
       gunRoot.rotation.set(player.recoilP * 0.4 + swayY, swayX * 0.8, -swayX * 0.5);
-      const gun = guns[wep];
+      const gun = guns[mdl(wep)];
       if (gun.mag) {
         const rt = wpn.reloadTime;
         const t = player.reload > 0 ? Math.sin((player.reload / rt) * Math.PI) : 0;
@@ -3020,7 +3150,7 @@ export function createGame(
     e.preventDefault();
     if (performance.now() < wheelLock) return;
     wheelLock = performance.now() + 180;
-    selectWeapon(wep + (e.deltaY > 0 ? 1 : -1));
+    selectWeapon(slot + (e.deltaY > 0 ? 1 : -1));
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -3033,9 +3163,9 @@ export function createGame(
       if (e.code === "Digit1") selectWeapon(0);
       else if (e.code === "Digit2") selectWeapon(1);
       else if (e.code === "Digit3") selectWeapon(2);
-      else if (e.code === "Digit4") selectWeapon(3);
-      else if (e.code === "Digit5") selectWeapon(4);
-      else if (e.code === "KeyQ") selectWeapon(wep + 1);
+      else if (e.code === "KeyQ") selectWeapon(slot + 1);
+      else if (e.code === "KeyE") useAbility(0);
+      else if (e.code === "KeyF") useAbility(1);
     }
     if ((e.code === "Escape" || e.code === "KeyP") && phase === "play") {
       pause();
@@ -3291,11 +3421,41 @@ export function createGame(
     getSens: () => baseSens,
     selectWeapon,
     cycleWeapon() {
-      selectWeapon(wep + 1);
+      selectWeapon(slot + 1);
+    },
+    setLoadout(ids: string[]) {
+      const idx = ids.map((id) => WEAPONS.findIndex((w) => w.id === id)).filter((i) => i >= 0).slice(0, 3);
+      for (const d of [0, 1, 3]) if (idx.length < 3 && !idx.includes(d)) idx.push(d);
+      loadout = idx;
+      if (phase !== "play") {
+        slot = 0;
+        wep = loadout[0];
+        pullAmmo();
+        showGun();
+      }
+    },
+    setAbilities(ids: string[]) {
+      abils = ids.filter((id): id is AbilId => id in ABIL_CD).slice(0, 2).map((id) => ({ id, cd: 0 }));
+    },
+    useAbility,
+    getAbilities: () => abils.map((a) => ({ id: a.id, cd: a.cd, max: ABIL_CD[a.id] })),
+    getLoadoutNames: () => loadout.map((i) => WEAPONS[i].name),
+    setSkin(hex: number | null) {
+      poly.color.setHex(hex ?? 0x1c1f1c);
+      accent.emissive.setHex(hex ?? 0x000000);
+      accent.emissiveIntensity = hex === null ? 0 : 0.35;
     },
   };
 
   window.__controlsTest = {
+    qaWin(kills = 3) {
+      for (let i = 0; i < kills && i < bots.length; i++) if (bots[i].alive) hurtBot(bots[i], 999, false);
+      bases[0].p = 100;
+      bases[1].p = 100;
+      finish("win", "QA");
+    },
+    getLoadout: () => loadout.map((i) => WEAPONS[i].id),
+    getWeapon: () => WEAPONS[wep].id,
     getYaw: () => player.yaw,
     getSpeed: () => Math.hypot(player.vx, player.vz),
     getPos: () => ({ x: player.x, y: player.y, z: player.z }),
@@ -3386,6 +3546,9 @@ declare global {
       lookAt: (x: number, z: number) => void;
       nearestBot: () => { x: number; z: number; hp: number; alive: boolean; name: string };
       deploy: () => void;
+      qaWin: (kills?: number) => void;
+      getLoadout: () => string[];
+      getWeapon: () => string;
       getRemote: () => { x: number; z: number; name: string } | null;
       getMap: () => string;
       toMenu: () => void;

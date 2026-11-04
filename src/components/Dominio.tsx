@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Crosshair, Flag, RotateCcw, Shield, Timer, Users, Volume2, VolumeX } from "lucide-react";
 import type { GameApi, PhaseInfo } from "@/game/engine";
 import { MAP_LIST, type MapId } from "@/game/maps";
 import { P2PRoom, type PeerInfo } from "@/lib/multiplayer/peerjs-room";
 import { loadSave, type Diff, type QualityPref } from "@/game/save";
+import { ABILITIES, SKINS, loadProfile, matchReward, saveProfile, type Profile } from "@/game/profile";
+import { Arsenal, Wallet, type ArsenalTab } from "@/components/Arsenal";
+import { UnlockShow } from "@/components/Unlock";
+import type { Unlock } from "@/game/profile";
 
 function fmtElapsed(total: number) {
   const s = Math.max(0, Math.round(total));
@@ -22,7 +26,14 @@ export function Dominio() {
     wins: 0,
     reason: "",
     map: "complejo",
+    basesTaken: 0,
   });
+  const [profile, setProfile] = useState<Profile>(() => loadProfile());
+  const [arsenal, setArsenal] = useState<ArsenalTab | null>(null);
+  const [unlocks, setUnlocks] = useState<Unlock[]>([]);
+  const [earned, setEarned] = useState<{ coins: number; special: number; xp: number; unlocked: string[] } | null>(null);
+  const [abilState, setAbilState] = useState<{ id: string; cd: number; max: number }[]>([]);
+  const prevPhase = useRef("menu");
   const [locked, setLocked] = useState(false);
   const [sens, setSens] = useState(0.0022);
   const [muted, setMuted] = useState(false);
@@ -178,6 +189,36 @@ export function Dominio() {
     };
   }, []);
 
+  useEffect(() => {
+    const g = api.current;
+    if (!g) return;
+    g.setLoadout(profile.loadout);
+    g.setAbilities(profile.equipped);
+    const sk = SKINS.find((s) => s.id === profile.skin);
+    g.setSkin(!sk || sk.color < 0 ? null : sk.color);
+  }, [profile, ready]);
+
+  useEffect(() => {
+    const prev = prevPhase.current;
+    prevPhase.current = screen.phase;
+    if ((screen.phase === "win" || screen.phase === "lose") && prev === "play") {
+      const cur = loadProfile();
+      const r = matchReward(cur, screen.kills, screen.basesTaken, screen.phase === "win");
+      saveProfile(r.profile);
+      setProfile(r.profile);
+      setEarned({ coins: r.coins, special: r.special, xp: r.xp, unlocked: r.unlocked });
+      if (r.unlocks.length) setUnlocks(r.unlocks);
+    } else if (screen.phase === "play") setEarned(null);
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen.phase !== "play") return;
+    const id = window.setInterval(() => setAbilState(api.current?.getAbilities() ?? []), 150);
+    return () => window.clearInterval(id);
+  }, [screen.phase]);
+
+  const loadoutNames = profile.loadout.map((id) => ({ rifle: "R-47", smg: "VX-9", shot: "SC-12", pistol: "P-19", dmr: "M-90", lmg: "AM-60", revolver: "RV-44", carbine: "K-4", glaciar: "GL-0" })[id]);
+
   const announced = useRef(new Set<string>());
 
   function closeRoom() {
@@ -314,9 +355,9 @@ export function Dominio() {
             <div ref={reloadRef} className="h-full origin-left bg-amber" />
           </div>
           <div ref={slotsRef} className="pointer-events-auto relative z-30 mt-2 flex justify-end gap-1">
-            {["1", "2", "3", "4", "5"].map((n, i) => (
+            {loadoutNames.map((n, i) => (
               <button
-                key={n}
+                key={i}
                 type="button"
                 className="wep-slot"
                 onPointerDown={(e) => e.stopPropagation()}
@@ -325,7 +366,15 @@ export function Dominio() {
                   api.current?.selectWeapon(i);
                 }}
               >
-                {n}
+                {i + 1} {n}
+              </button>
+            ))}
+          </div>
+          <div className="pointer-events-auto relative z-30 mt-1 hidden justify-end gap-1 md:flex">
+            {abilState.map((a, i) => (
+              <button key={a.id} type="button" className="wep-slot abil-btn" onClick={(e) => { e.stopPropagation(); api.current?.useAbility(i); }}>
+                {i === 0 ? "E" : "F"} {ABILITIES.find((x) => x.id === a.id)?.name}
+                <span className="cd" style={{ transform: `scaleY(${a.max ? a.cd / a.max : 0})` }} />
               </button>
             ))}
           </div>
@@ -401,6 +450,19 @@ export function Dominio() {
               <TapButton label="ARMA" onClick={() => api.current?.cycleWeapon()} />
             </div>
             <div className="flex gap-2">
+              {abilState.map((a, i) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="abil-btn h-12 min-w-16 rounded-md border border-cyan/70 bg-surface/85 px-3 text-xs tracking-wide text-cyan"
+                  onPointerDown={(e) => { e.stopPropagation(); api.current?.useAbility(i); }}
+                >
+                  {a.cd > 0 ? Math.ceil(a.cd) : ABILITIES.find((x) => x.id === a.id)?.name}
+                  <span className="cd" style={{ transform: `scaleY(${a.max ? a.cd / a.max : 0})` }} />
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
               <TapButton label="SALTO" onClick={() => api.current?.jump()} />
               <TapButton label="AGACHAR" onClick={() => api.current?.toggleCrouch()} />
               <HoldButton label="CORRER" onDown={() => api.current?.setSprintHeld(true)} onUp={() => api.current?.setSprintHeld(false)} />
@@ -451,6 +513,23 @@ export function Dominio() {
                 <dd className="font-display text-xl">{screen.best === null ? "—" : fmtElapsed(screen.best)}</dd>
               </div>
             </dl>
+            <div className="mt-3 rounded-md border border-line p-3" data-testid="perfil">
+              <div className="flex items-center justify-between">
+                <p className="text-xs tracking-widest text-muted">TU EQUIPO</p>
+                <Wallet p={profile} />
+              </div>
+              <p className="mt-1 text-xs text-muted">
+                Armas: <b className="text-fg">{loadoutNames.join(" · ")}</b> · Habilidades:{" "}
+                <b className="text-fg">{profile.equipped.map((a) => ABILITIES.find((x) => x.id === a)?.name).join(" · ")}</b>
+              </p>
+              <div className="mt-2 grid grid-cols-4 gap-1">
+                {([["armeria", "ARMERÍA"], ["habilidades", "HABILIDADES"], ["pase", "PASE"], ["codigos", "CÓDIGOS"]] as [ArsenalTab, string][]).map(([id, label]) => (
+                  <button key={id} type="button" className="h-9 rounded-md border border-line text-[11px] tracking-widest hover:border-amber" onClick={() => setArsenal(id)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="mt-4 rounded-md border border-line p-3">
               <p className="flex items-center gap-2 text-xs tracking-widest text-muted">
                 <Users className="size-3.5" aria-hidden />
@@ -664,11 +743,22 @@ export function Dominio() {
         />
       )}
 
+      {arsenal && screen.phase === "menu" && (
+        <Arsenal profile={profile} setProfile={setProfile} tab={arsenal} setTab={setArsenal} onClose={() => setArsenal(null)} onUnlocks={setUnlocks} />
+      )}
+      {unlocks.length > 0 && <UnlockShow key={unlocks.map((u) => u.text).join("|")} items={unlocks} onDone={() => setUnlocks([])} />}
+
       {(screen.phase === "win" || screen.phase === "lose") && (
         <Overlay
           kicker={screen.phase === "win" ? "OBJETIVO CUMPLIDO" : "RONDA PERDIDA"}
           title={screen.phase === "win" ? "BASES ASEGURADAS" : "TIEMPO AGOTADO"}
           body={screen.reason}
+          extra={earned && (
+            <div className="mt-3 rounded-md border border-amber/50 bg-amber/10 p-2 text-sm" data-testid="earned">
+              <p className="font-display tracking-wide text-amber">+{earned.coins} monedas · +{earned.special} ✦ · +{earned.xp} XP</p>
+              {earned.unlocked.map((u) => <p key={u} className="text-xs text-cyan">🎁 {u}</p>)}
+            </div>
+          )}
           primary="OTRA RONDA"
           onPrimary={() => api.current?.start()}
           secondary="MENÚ"
@@ -748,7 +838,9 @@ function Overlay({
   secondary,
   onSecondary,
   stats,
+  extra,
 }: {
+  extra?: ReactNode;
   kicker: string;
   title: string;
   body: string;
@@ -764,6 +856,7 @@ function Overlay({
         <p className="text-xs tracking-widest text-amber">{kicker}</p>
         <h2 className="mt-2 font-display text-4xl tracking-wide">{title}</h2>
         <p className="mt-2 text-sm text-muted">{body}</p>
+        {extra}
         {stats && (
           <dl className="mt-4 grid grid-cols-4 gap-2">
             {stats.map(([label, value]) => (

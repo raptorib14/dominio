@@ -271,3 +271,46 @@
 .map-complejo::before { background: linear-gradient(90deg, #e2a322, #f0c46a); }
 .map-deposito::before { background: linear-gradient(90deg, #3cb8b2, #8fd8ff); }
 .map-muelle::before { background: linear-gradient(90deg, #2f7fd4, #9ad0ff); }
+
+.shop-card {
+  display: flex; flex-direction: column; gap: 2px; text-align: left; min-height: 6.5rem;
+  border: 1px solid var(--color-line, #3a3a32); border-radius: 0.5rem; padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.02); transition: border-color 0.15s, background 0.15s;
+}
+.shop-card.is-on { border-color: #e2a322; background: rgba(226, 163, 34, 0.14); box-shadow: 0 0 0 1px rgba(226,163,34,.5) inset; }
+.shop-card.is-locked { opacity: 0.72; }
+.shop-card.is-premium { background: linear-gradient(160deg, rgba(24,214,200,.14), rgba(106,47,208,.16)); border-color: rgba(24,214,200,.5); }
+.pass-tier { display:flex; flex-direction:column; gap:2px; min-height:4.6rem; padding:.4rem; border-radius:.4rem;
+  border:1px solid var(--color-line, #3a3a32); }
+.pass-tier.is-done { border-color:#e2a322; background:rgba(226,163,34,.12); }
+.pass-tier.is-premium { background-image: linear-gradient(160deg, rgba(24,214,200,.10), rgba(106,47,208,.12)); }
+.abil-btn { position: relative; overflow: hidden; }
+.abil-btn .cd { position:absolute; inset:0; background:rgba(0,0,0,.55); transform-origin: bottom; pointer-events:none; }
+/* Pase POLAR */
+.pass-row { display:grid; grid-template-columns: 4.2rem repeat(20, 6.2rem); gap:.35rem; }
+.pass-tier.is-locked-track { opacity:.55; }
+.pass-tier.is-prem { border-color:#5fb8e8; background-image:linear-gradient(160deg, rgba(120,200,255,.16), rgba(255,255,255,.05)); }
+.pass-tier.is-prem.is-done { border-color:#bfe6ff; background-color:rgba(160,220,255,.22); }
+.pass-tier.is-final { border-color:#e9f8ff; box-shadow:0 0 14px rgba(120,210,255,.6); }
+.polar-hero { position:relative; border-radius:.5rem; overflow:hidden; border:1px solid #5fb8e8;
+  background: radial-gradient(circle at 50% 40%, #1b4f78 0%, #0a1f33 70%); }
+.unlock-final { position:absolute; inset:0; z-index:60; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:1rem; overflow:hidden; background: radial-gradient(circle at 50% 45%, #1d5c8c 0%, #071827 70%); animation: uf-in .35s ease-out; }
+.unlock-rays { position:absolute; left:50%; top:45%; width:220vmax; height:220vmax; margin:-110vmax 0 0 -110vmax; pointer-events:none;
+  background: repeating-conic-gradient(rgba(190,235,255,.16) 0 6deg, transparent 6deg 18deg); animation: uf-spin 14s linear infinite; }
+.unlock-flash { position:absolute; inset:0; background:#fff; pointer-events:none; animation: uf-flash .9s ease-out forwards; }
+.unlock-canvas { position:relative; width:min(92vw, 34rem); height:min(52vh, 22rem); }
+.unlock-kicker { position:relative; font-size:.7rem; letter-spacing:.3em; color:#9fe9ff; }
+.unlock-title { position:relative; font-family: var(--font-display, inherit); font-size:clamp(1.6rem, 6vw, 3rem); color:#fff;
+  text-shadow: 0 0 18px #47d4ff, 0 0 40px #2a8cff; animation: uf-pop .8s cubic-bezier(.2,1.6,.4,1) .5s both; }
+.unlock-small { position:absolute; left:50%; top:18%; transform:translateX(-50%); z-index:55; pointer-events:auto; }
+.unlock-card { position:relative; display:flex; flex-direction:column; align-items:center; gap:2px; padding:.7rem 1.2rem; border-radius:.6rem;
+  background:rgba(30,26,14,.92); border:1px solid #e2a322; color:#ffe7b0; overflow:hidden; animation: us-in .45s cubic-bezier(.2,1.5,.4,1); }
+.unlock-card.is-prem { background:rgba(8,30,50,.94); border-color:#9fe9ff; color:#e6f8ff; box-shadow:0 0 22px rgba(71,212,255,.55); }
+.unlock-burst { position:absolute; inset:-60%; background: radial-gradient(circle, rgba(255,255,255,.55) 0%, transparent 55%); animation: us-burst .7s ease-out forwards; pointer-events:none; }
+@keyframes uf-in { from { opacity:0 } to { opacity:1 } }
+@keyframes uf-spin { to { transform: rotate(360deg) } }
+@keyframes uf-flash { 0% { opacity:.95 } 100% { opacity:0 } }
+@keyframes uf-pop { from { transform:scale(.3); opacity:0 } to { transform:scale(1); opacity:1 } }
+@keyframes us-in { from { transform:scale(.5) translateY(-20px); opacity:0 } to { transform:none; opacity:1 } }
+@keyframes us-burst { from { transform:scale(.2); opacity:1 } to { transform:scale(1.4); opacity:0 } }
