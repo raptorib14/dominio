@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const [,, name, w='1280', h='720'] = process.argv;
+const b = await chromium.launch({ args: ["--use-gl=angle","--use-angle=swiftshader","--enable-unsafe-swiftshader"] });
+const p = await b.newPage({ viewport: { width:+w, height:+h } });
+p.on("console", m => m.type()==="error" && console.log("ERR", m.text()));
+await p.goto("http://127.0.0.1:4173/");
+await p.waitForTimeout(5000);
+await p.screenshot({ path: `capturas/${name}.png` });
+console.log(await p.evaluate(() => document.body.innerText.slice(0,800)));
+await b.close();

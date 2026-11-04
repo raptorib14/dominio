@@ -1,0 +1,13 @@
+node_modules/
+.vercel/
+.grok/
+.tanstack/
+.node_modules.lock
+.env*
+artifacts/
+screenshots/
+dist/
+dist-static/
+startup.sh
+*.pem
+*.key
