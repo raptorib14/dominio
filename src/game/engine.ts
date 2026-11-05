@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { createAudio } from "@/game/audio";
 import { createFx, flashTexture } from "@/game/fx";
 import { MAPS, type GameMap, type MapId } from "@/game/maps";
@@ -1004,6 +1005,8 @@ export function createGame(
         top: { value: new THREE.Color("#2f6ea8") },
         hor: { value: new THREE.Color("#f0d2a4") },
         bot: { value: new THREE.Color("#b7a07e") },
+        hdr: { value: null as THREE.Texture | null },
+        uHdr: { value: 0 },
       },
       vertexShader: `
         varying vec3 vP;
@@ -1017,6 +1020,8 @@ export function createGame(
         uniform vec3 top;
         uniform vec3 hor;
         uniform vec3 bot;
+        uniform sampler2D hdr;
+        uniform float uHdr;
         void main() {
           vec3 n = normalize(vP);
           float h = n.y;
@@ -1024,7 +1029,15 @@ export function createGame(
           col = mix(bot, col, smoothstep(-0.18, 0.05, h));
           float bands = sin(n.x * 7.0 + n.z * 5.0) * sin(n.z * 11.0 + n.x * 3.0);
           float cloud = smoothstep(0.15, 0.8, bands * 0.5 + 0.5) * smoothstep(0.12, 0.48, h);
-          col = mix(col, vec3(0.93, 0.94, 0.96), cloud * 0.55);
+          col = mix(col, vec3(0.93, 0.94, 0.96), cloud * 0.55 * (1.0 - uHdr));
+          if (uHdr > 0.0) {
+            vec2 euv = vec2(atan(n.z, n.x) * 0.1591549 + 0.5, asin(clamp(n.y, -1.0, 1.0)) * 0.3183099 + 0.5);
+            vec3 hc = texture2D(hdr, euv).rgb * 0.9;
+            hc = hc / (1.0 + hc * 0.6);
+            hc = pow(hc, vec3(1.0 / 2.2));
+            hc *= mix(vec3(1.0), hor * 1.15, 0.3);
+            col = mix(col, hc, uHdr * smoothstep(0.0, 0.2, h));
+          }
           vec3 sunDir = normalize(vec3(0.48, 0.72, 0.34));
           float sun = pow(max(dot(n, sunDir), 0.0), 520.0);
           float glow = pow(max(dot(n, sunDir), 0.0), 5.0);
@@ -1079,7 +1092,7 @@ export function createGame(
   ) {
     const geo = new THREE.BoxGeometry(w, h, d);
     geo.translate(x, y0 + h / 2, z);
-    pushGeometry(kind, geo, tint, kind === "concrete" || kind === "sand");
+    pushGeometry(kind, geo, tint, kind === "concrete" || kind === "sand" || kind === "metal");
     if (collide) {
       colliders.push({
         minX: x - w / 2,
@@ -1121,6 +1134,42 @@ export function createGame(
     hazard: 0.3,
   };
   const levelMats: THREE.MeshStandardMaterial[] = [];
+  // Realistic CC0 PBR textures (ambientCG) + HDRI sky (Poly Haven), bundled in public/tex.
+  type Pbr = { map: THREE.Texture; normal: THREE.Texture; rough: THREE.Texture };
+  const pbr: Partial<Record<Kind | "ground", Pbr>> = {};
+  const matKind = new Map<THREE.MeshStandardMaterial, Kind>();
+  const texBase = `${import.meta.env.BASE_URL}tex/`;
+  function applyPbr(mat: THREE.MeshStandardMaterial, set: Pbr, scale: number) {
+    mat.map = set.map;
+    mat.normalMap = set.normal;
+    mat.roughnessMap = set.rough;
+    mat.normalScale.set(scale, scale);
+    mat.needsUpdate = true;
+  }
+  function loadPbrTextures() {
+    const loader = new THREE.TextureLoader();
+    const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    const sets: (Kind | "ground")[] = ["concrete", "wood", "metal", "ground"];
+    for (const k of sets) {
+      const load = (suffix: string, srgb: boolean) => {
+        const t = loader.load(`${texBase}${k}_${suffix}.jpg`);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.anisotropy = aniso;
+        if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+        if (k === "ground") t.repeat.set(26, 26);
+        return t;
+      };
+      const set: Pbr = { map: load("c", true), normal: load("n", false), rough: load("r", false) };
+      Promise.all([set.map, set.normal, set.rough].map((t) => new Promise<void>((res) => {
+        const check = () => (t.image && (t.image as HTMLImageElement).complete !== false && (t.image as { width?: number }).width ? res() : setTimeout(check, 120));
+        check();
+      }))).then(() => {
+        pbr[k] = set;
+        if (k === "ground") applyPbr(groundMat, set, 1);
+        else for (const [mat, mk] of matKind) if (mk === k) applyPbr(mat, set, 1);
+      });
+    }
+  }
   const worldMeshes: THREE.Mesh[] = [];
 
   function commitWorld() {
@@ -1148,6 +1197,9 @@ export function createGame(
         envMapIntensity: kind === "metal" ? 1.15 : 0.28,
       });
       levelMats.push(mat);
+      matKind.set(mat, kind);
+      const set = pbr[kind];
+      if (set) applyPbr(mat, set, 1);
       const mesh = new THREE.Mesh(merged, mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -1157,6 +1209,19 @@ export function createGame(
     });
   }
 
+  let hdrEnv: THREE.Texture | null = null;
+  function loadHdrSky() {
+    new HDRLoader().load(`${texBase}sky.hdr`, (t) => {
+      t.mapping = THREE.EquirectangularReflectionMapping;
+      const gen = new THREE.PMREMGenerator(renderer);
+      hdrEnv = gen.fromEquirectangular(t).texture;
+      gen.dispose();
+      scene.environment = hdrEnv;
+      const skyMat = sky.material as THREE.ShaderMaterial;
+      skyMat.uniforms.hdr.value = t;
+      applyAtmosphere(activeMap);
+    }, undefined, () => {});
+  }
   const groundMaps = makeMaps(512, paintYard, 0.92, 0.2);
   groundMaps.map.repeat.set(7, 7);
   groundMaps.normal.repeat.set(7, 7);
@@ -1237,7 +1302,10 @@ export function createGame(
     hemi.groundColor.set(def.hemi.ground);
     hemi.intensity = def.hemi.intensity;
     dustMat.opacity = def.dust;
-    scene.environmentIntensity = qualityPref === "realista" ? 0.62 : qualityPref === "rendimiento" ? 0.22 : 0.4;
+    const night = def.id === "deposito";
+    skyMat.uniforms.uHdr.value = skyMat.uniforms.hdr.value && !night ? 0.92 : 0;
+    const envBase = qualityPref === "realista" ? 0.62 : qualityPref === "rendimiento" ? 0.22 : 0.4;
+    scene.environmentIntensity = hdrEnv ? envBase * (night ? 0.35 : 1.25) : envBase;
   }
 
   function fillLevel(def: GameMap) {
@@ -2788,7 +2856,7 @@ export function createGame(
         fpsSamples.push(fps);
         if (fpsSamples.length > 8) fpsSamples.shift();
         const avg = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;
-        if (qualityPref === "auto" && avg < 52 && quality > 0 && performance.now() - lastDrop > 2200) {
+        if (qualityPref === "auto" && !qaQualityLock && avg < 52 && quality > 0 && performance.now() - lastDrop > 2200) {
           quality -= 1;
           lastDrop = performance.now();
           fpsSamples.length = 0;
@@ -2929,6 +2997,7 @@ export function createGame(
     fx.update(dt);
     fx.setHurt(phase === "menu" ? 0 : Math.min(1, hurt));
     renderer.autoClear = true;
+    fx.setAo(phase === "play");
     fx.render();
     if (phase !== "menu") {
       renderer.autoClear = false;
@@ -2954,13 +3023,14 @@ export function createGame(
     lookDY = 0;
   }
 
+  let qaQualityLock = false;
   function applyQuality() {
     const cap = quality === 2 ? (qualityPref === "realista" ? 1.75 : 1.5) : quality === 1 ? 1.15 : 1;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, cap));
     sun.castShadow = quality > 0;
     renderer.shadowMap.enabled = quality > 0;
     if (quality > 0) {
-      const size = quality === 2 ? (qualityPref === "realista" ? 2048 : 1024) : 512;
+      const size = quality === 2 ? 2048 : 1024;
       sun.shadow.mapSize.set(size, size);
       if (sun.shadow.map) {
         sun.shadow.map.dispose();
@@ -3273,6 +3343,13 @@ export function createGame(
   else if (qualityPref === "realista") quality = 2;
   applyQuality();
   resize();
+  // Load the heavy realistic assets once the intro video is gone, so skipping it stays instant.
+  const startRealAssets = () => {
+    if (document.querySelector("[data-testid=intro]")) return void setTimeout(startRealAssets, 300);
+    loadPbrTextures();
+    loadHdrSky();
+  };
+  startRealAssets();
   audio.setMuted(save.muted);
   audio.setVolume(save.volume);
   let raf = requestAnimationFrame(frame);
@@ -3448,6 +3525,12 @@ export function createGame(
   };
 
   window.__controlsTest = {
+    setQuality(q: number) {
+      qualityPref = q === 2 ? "realista" : q === 0 ? "rendimiento" : "auto";
+      quality = q;
+      qaQualityLock = true;
+      applyQuality();
+    },
     qaWin(kills = 3) {
       for (let i = 0; i < kills && i < bots.length; i++) if (bots[i].alive) hurtBot(bots[i], 999, false);
       bases[0].p = 100;
@@ -3529,6 +3612,7 @@ declare global {
       getSpeed: () => number;
       getPos: () => { x: number; y: number; z: number };
       getFps: () => number;
+      setQuality: (q: number) => void;
       getPhase: () => string;
       getPlayer: () => {
         hp: number;

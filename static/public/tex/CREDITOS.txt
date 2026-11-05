@@ -1,0 +1,2 @@
+Texturas PBR: ambientCG.com (CC0 1.0) - Concrete044C, Planks012, CorrugatedSteel007A, Ground054.
+Cielo HDRI: Poly Haven (CC0) - kloofendal_48d_partly_cloudy_puresky (1k).

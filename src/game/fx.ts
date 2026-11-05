@@ -9,6 +9,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 
 function radialTexture(stops: [number, string][]) {
   const c = document.createElement("canvas");
@@ -179,12 +180,18 @@ export function createFx(renderer: THREE.WebGLRenderer, scene: THREE.Scene, came
   let composer: EffectComposer | null = null;
   let grade: ShaderPass | null = null;
   let bloom: UnrealBloomPass | null = null;
+  let ao: GTAOPass | null = null;
   let postOn = false;
   function ensureComposer() {
     if (composer) return composer;
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
     const size = renderer.getSize(new THREE.Vector2());
+    // Ambient occlusion (contact shadows in corners) — ALTO only.
+    ao = new GTAOPass(scene, camera, size.x, size.y);
+    ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 12 });
+    ao.blendIntensity = 0.85;
+    composer.addPass(ao);
     bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.42, 0.5, 0.86);
     composer.addPass(bloom);
     grade = new ShaderPass(GradeShader);
@@ -203,7 +210,11 @@ export function createFx(renderer: THREE.WebGLRenderer, scene: THREE.Scene, came
         composer.setPixelRatio(renderer.getPixelRatio());
         composer.setSize(w, h);
         bloom?.setSize(w / 2, h / 2);
+        ao?.setSize(w, h);
       }
+    },
+    setAo(on: boolean) {
+      if (ao) ao.enabled = on;
     },
     setHurt(v: number) {
       if (grade) grade.uniforms.uHurt.value = v;
